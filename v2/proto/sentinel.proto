@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package sentinel;
+
+option go_package = "v2/go_plugin/pb;pb";
+
+// Service coordinating custom scoring and placement checks between K8s and ACO
+service ACOPredictiveScheduler {
+  // Score nodes based on cost engine and predictive trust heuristic
+  rpc ScoreNodes(ScoreRequest) returns (ScoreResponse);
+
+  // Confirms the placement of a pod to commit pheromones or rollback reservations
+  rpc PlacementCommitted(PlacementCommittedRequest) returns (PlacementCommittedResponse);
+}
+
+message PodSpec {
+  string uid = 1;
+  string name = 2;
+  string namespace = 3;
+  double cpu_cores_requested = 4;
+  double memory_gb_requested = 5;
+  string workload_type = 6;  // e.g. BATCH, GPU_INFERENCE, LATENCY_CRITICAL
+}
+
+message NodeCandidate {
+  string node_id = 1;
+  
+  // Go-owned capacities (from K8s internal scheduler state snapshot)
+  double allocatable_cpu = 2;
+  double allocatable_memory_gb = 3;
+  double scheduler_expected_free_cpu = 4;
+  double scheduler_expected_free_memory_gb = 5;
+
+  // Node-reported telemetry (self-reported via node agent heartbeat)
+  double reported_allocatable_cpu = 6;
+  double reported_used_cpu = 7;
+  double reported_free_cpu = 8;
+  double reported_allocatable_memory_gb = 9;
+  double reported_used_memory_gb = 10;
+  double reported_free_memory_gb = 11;
+  
+  // Telemetry timing tracking for freshness and CV consistency checks
+  double last_heartbeat_timestamp = 12;            // Unix epoch in seconds
+  repeated double recent_heartbeat_intervals = 13; // History of durations in seconds
+}
+
+message ScoreRequest {
+  PodSpec pod = 1;
+  repeated NodeCandidate nodes = 2;
+  double gamma = 3; // Trust discount exponent (ablation parameter)
+}
+
+message NodeScore {
+  string node_id = 1;
+  double eta = 2;            // Heuristic optimization score (from CostEngine)
+  double confidence = 3;     // Composite trust rating (kappa_i)
+  double final_score = 4;    // eta * (kappa_i ^ gamma)
+}
+
+message ScoreResponse {
+  repeated NodeScore scores = 1;
+}
+
+message PlacementCommittedRequest {
+  string pod_uid = 1;
+  string node_id = 2;
+  bool success = 3;          // True = successfully bound, False = bind failed / unreserved
+}
+
+message PlacementCommittedResponse {
+  bool acknowledged = 1;
+}

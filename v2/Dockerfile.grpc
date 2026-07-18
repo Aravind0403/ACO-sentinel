@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies (gRPC + Pydantic + CostEngine dependencies)
+RUN pip install --no-cache-dir grpcio grpcio-tools pydantic numpy torch prometheus-client
+
+# Copy core modules and V2 source code
+COPY core/ ./core/
+COPY v2/ ./v2/
+
+# Make modules importable
+ENV PYTHONPATH=/app:/app/core:/app/v2/proto
+
+EXPOSE 50051
+
+CMD ["python", "v2/grpc_server.py"]

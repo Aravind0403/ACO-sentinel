@@ -1,0 +1,27 @@
+# Stage 1: Build the custom kube-scheduler binary
+FROM golang:1.26.4-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+WORKDIR /workspace
+
+# Copy go.mod, go.sum, and code files
+COPY v2/go_plugin/go.mod v2/go_plugin/go.sum /workspace/
+COPY v2/go_plugin/pb /workspace/pb
+COPY v2/go_plugin/*.go /workspace/
+
+# Prefetch dependencies
+RUN go mod download
+
+# Compile custom kube-scheduler binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o kube-scheduler .
+
+# Stage 2: Packaging the final scheduler image
+FROM alpine:3.19
+
+WORKDIR /bin
+
+COPY --from=builder /workspace/kube-scheduler /bin/kube-scheduler
+
+CMD ["/bin/kube-scheduler"]

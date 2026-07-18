@@ -1,0 +1,13 @@
+[tool.pyrefly]
+search-path = [
+    "core",
+    "v2/proto",
+    "v2"
+]
+
+[tool.pyright]
+extraPaths = [
+    "core",
+    "v2/proto",
+    "v2"
+]
