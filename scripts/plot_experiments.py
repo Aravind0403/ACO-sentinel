@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def generate_plots():
-    results_path = "/Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront/docs/experiment_results.json"
+    results_path = "docs/experiment_results.json"
     if not os.path.exists(results_path):
         print(f"Error: results file {results_path} not found.")
         return
@@ -101,7 +101,7 @@ def generate_plots():
         ax2.text(0.5, 0.5, f"Data for Gamma={g_target} not found", ha="center", va="center")
 
     plt.tight_layout()
-    output_path = "/Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront/docs/v2-experiments.png"
+    output_path = "docs/v2-experiments.png"
     plt.savefig(output_path, dpi=150)
     print(f"✅ Success: Generated plots saved to {output_path}")
 

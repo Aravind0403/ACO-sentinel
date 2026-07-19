@@ -175,7 +175,7 @@ func main() {
 	}
 
 	// Write results to JSON
-	outputDir := "/Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront/docs"
+	outputDir := "../../docs"
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		fmt.Printf("Error: Failed to create output directory: %v\n", err)
 		os.Exit(1)

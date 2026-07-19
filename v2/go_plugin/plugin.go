@@ -35,8 +35,9 @@ const (
 	LabelWorkloadType = "aco-sentinel.io/workload-type"
 )
 
-// SentinelPlugin implements the Score, Reserve, and PostBind plugins
+// SentinelPlugin implements the PreScore, Score, Reserve, and PostBind plugins
 type SentinelPlugin struct {
+	handle             framework.Handle
 	client             pb.ACOPredictiveSchedulerClient
 	conn               *grpc.ClientConn
 	gamma              float64
@@ -44,8 +45,10 @@ type SentinelPlugin struct {
 	reservedPlacements map[string]string // Pod UID -> Node Name
 }
 
+var _ framework.PreScorePlugin = &SentinelPlugin{}
 var _ framework.ScorePlugin = &SentinelPlugin{}
 var _ framework.ReservePlugin = &SentinelPlugin{}
+var _ framework.PreBindPlugin = &SentinelPlugin{}
 var _ framework.PostBindPlugin = &SentinelPlugin{}
 
 func (p *SentinelPlugin) Name() string {
@@ -58,13 +61,14 @@ func New(obj runtime.Object, handle framework.Handle) (framework.Plugin, error) 
 	dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := grpc.DialContext(dialCtx, "localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.DialContext(dialCtx, "127.0.0.1:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gRPC: %w", err)
 	}
 
 	client := pb.NewACOPredictiveSchedulerClient(conn)
 	return &SentinelPlugin{
+		handle:             handle,
 		client:             client,
 		conn:               conn,
 		gamma:              1.0, // default trust exponent
@@ -189,7 +193,7 @@ func (s *stateData) Clone() framework.StateData {
 const StateKey = framework.StateKey(Name + "State")
 
 // PreScore batches all candidate nodes and fetches trust-weighted heuristic scores from gRPC server
-func (p *SentinelPlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
+func (p *SentinelPlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*v1.Node) *framework.Status {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -197,7 +201,17 @@ func (p *SentinelPlugin) PreScore(ctx context.Context, state *framework.CycleSta
 	pbPod := extractPodSpec(pod)
 	pbNodes := make([]*pb.NodeCandidate, 0, len(nodes))
 	for _, n := range nodes {
-		pbNodes = append(pbNodes, extractNodeCandidate(n))
+		var nodeInfo *framework.NodeInfo
+		var err error
+		if p.handle != nil {
+			nodeInfo, err = p.handle.SnapshotSharedLister().NodeInfos().Get(n.Name)
+		}
+		if p.handle == nil || err != nil || nodeInfo == nil || nodeInfo.Node() == nil {
+			dummyNodeInfo := framework.NewNodeInfo()
+			dummyNodeInfo.SetNode(n)
+			nodeInfo = dummyNodeInfo
+		}
+		pbNodes = append(pbNodes, extractNodeCandidate(nodeInfo))
 	}
 
 	req := &pb.ScoreRequest{
@@ -244,6 +258,14 @@ func (p *SentinelPlugin) Score(ctx context.Context, state *framework.CycleState,
 }
 
 func (p *SentinelPlugin) ScoreExtensions() framework.ScoreExtensions {
+	return nil
+}
+
+// PreBind blocks binding for pod-rollback to force Unreserve rollbacks
+func (p *SentinelPlugin) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
+	if pod.Name == "pod-rollback" {
+		return framework.NewStatus(framework.Error, "Deliberate test rollback triggered for pod-rollback")
+	}
 	return nil
 }
 

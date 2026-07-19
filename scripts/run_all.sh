@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-REPO_ROOT="/Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 echo "--------------------------------------------------"
 echo "Starting Python gRPC server in background..."
 echo "--------------------------------------------------"
-python v2/grpc_server.py &
+python3 v2/grpc_server.py &
 SERVER_PID=$!
 
 # Ensure cleanup on exit
@@ -32,7 +32,7 @@ cd "$REPO_ROOT"
 echo "--------------------------------------------------"
 echo "Generating plots..."
 echo "--------------------------------------------------"
-python scripts/plot_experiments.py
+python3 scripts/plot_experiments.py
 
 echo "--------------------------------------------------"
 echo "Experiment execution completed successfully!"

@@ -50,7 +50,14 @@ data:
           score:
             enabled:
               - name: ACOPredictiveScheduler
+                weight: 100
           reserve:
+            enabled:
+              - name: ACOPredictiveScheduler
+          preBind:
+            enabled:
+              - name: ACOPredictiveScheduler
+          postBind:
             enabled:
               - name: ACOPredictiveScheduler
 ---

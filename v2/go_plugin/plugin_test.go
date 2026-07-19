@@ -103,7 +103,7 @@ func TestPlugin(t *testing.T) {
 	}
 
 	state := framework.NewCycleState()
-	status := plugin.PreScore(context.Background(), state, pod, []*framework.NodeInfo{nodeInfo})
+	status := plugin.PreScore(context.Background(), state, pod, []*v1.Node{node})
 	if status != nil && !status.IsSuccess() {
 		t.Errorf("PreScore failed: %v", status)
 	}

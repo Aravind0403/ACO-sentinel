@@ -35,3 +35,13 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Tarball archives
+*.tar
+
+# Go Binaries
+kube-scheduler
+v2/go_plugin/kube-scheduler
+
+## MD Files 
+*.md
