@@ -199,7 +199,54 @@ By sweeping the trust discount exponent $\gamma \in \{0, 0.5, 1, 2, 4\}$, we obs
 
 ---
 
-## Future Phases Index (Outline)
-*   **Phase 6: GKE Autopilot Validation:** Running cloud-parity pricing runs with minimal spend, serving as the real-cluster deployment gate.
-*   **Phase 7: Wrap-up & Packaging:** Drafting writeups and publishing.
+## Phase 6: Real-Cluster Validation & Deployment Migration
+
+In Phase 6, we transition from purely simulated environments to real-time cluster execution. We implement control plane emulations and finalize the cloud deployment strategy.
+
+### 1. Key Concepts: Live Emulation and Verification
+*   **KWOK (Kubernetes Without Kubelet):** We run an active local K8s control plane using KWOK to test custom scheduling profiles, admission controllers, and telemetry processing without running actual container workloads.
+*   **Telemetry Annotation Injection:** A background agent simulates physical node states by dynamically writing CPU, memory, and heartbeat timestamps directly as node annotations, which are scraped in real-time by the Go scheduler plugin.
+*   **Transactional Bind Verification:** By returning an error inside the `PreBind` hook for specific test workloads, we force the scheduler to trigger an `Unreserve` phase, verifying the gRPC rollback loop on the sidecar daemon.
+
+### 2. Deployment Migration: Chameleon Cloud vs. GKE Autopilot
+For production validation, we migrate the deployment target from GKE Autopilot to Chameleon Cloud (chameleoncloud.org):
+
+| Aspect | GKE Autopilot | Chameleon Cloud |
+| :--- | :--- | :--- |
+| **Control Plane Access** | **Blocked:** Completely managed control plane. You cannot deploy custom `kube-scheduler` binaries or scheduler profiles. | **Full Control:** Bare-metal access allows running custom scheduler binaries directly. |
+| **GPU Node Cost** | Very expensive (~$6/hr for GPU pools). | **100% Free** (NSF-funded computer systems research testbed). |
+| **Hardware-Level Profiling** | Virtualized hypervisors mask hardware details. | True bare-metal access allows clean telemetry and profiling. |
+
+---
+
+### 3. Senior Engineer Interview Questions
+
+#### Q1: "Why did you choose KWOK instead of Minikube or Kind for local cluster validation?"
+*   **Answer:** Minikube and Kind run real container runtimes. Spawning 100+ pods or GPU-labeled nodes locally consumes significant CPU/RAM. KWOK (Kubernetes Without Kubelet) only simulates API resources. We can create fake nodes, simulate telemetry annotations, and test the `kube-scheduler` logic under real API limits and `ResourceQuotas` at near-zero CPU/memory footprint.
+
+#### Q2: "How does GKE Autopilot restrict custom scheduler development, and how does a bare-metal cloud solve it?"
+*   **Answer:** GKE Autopilot manages the control plane nodes entirely as a black box. You cannot modify the scheduling configurations, add plugins, or replace the primary `kube-scheduler` binary. Using a bare-metal cloud like Chameleon Cloud allows us to provision physical nodes, initialize K8s using `kubeadm` or `k3s`, and have direct filesystem access to modify `/etc/kubernetes/manifests/kube-scheduler.yaml` to register our custom plugin.
+
+#### Q3: "How did you verify the scheduler's transactional rollback on a live control plane?"
+*   **Answer:** We configured the Go plugin to return a bind error inside the `PreBind` lifecycle hook for a dedicated test pod (`pod-rollback`). In a normal K8s scheduling cycle, if `PreBind` fails, the scheduler aborts binding and runs the `Unreserve` method. We verified that `Unreserve` fired and successfully invoked the `/PlacementCommitted` gRPC client with `Success: false` to clear reservations and prevent pheromone updates.
+
+---
+
+## Phase 7: Wrap-up & Git Hygiene
+
+In Phase 7, we audit repository layout, build artifacts, and establish packaging rules.
+
+### 1. Key Concepts: Git Hygiene and Build Packaging
+*   **Avoiding Binary Blobs in Git:** High-frequency scheduling binaries (like `kube-scheduler`, 82MB) and Docker image tarballs (like `sidecar.tar`, 5GB) must be ignored using `.gitignore` to prevent repository bloat and Git remote push timeouts.
+*   **Syncing Multi-Repository States:** Centralized tracking documents (like `Progress.md`) are used to maintain status parity when developing across multiple workspace repositories (e.g. V1 platform extension vs. V2 custom scheduler).
+
+---
+
+### 2. Senior Engineer Interview Questions
+
+#### Q1: "Why did your Git push fail with HTTP 500 when uploading the tar files, and how was it resolved?"
+*   **Answer:** GitHub has a strict file size limit of 100MB and a connection timeout for large HTTPS uploads. When `git add .` was run before updating `.gitignore`, the 5GB `sidecar.tar` was committed into the history. The push failed because git tried to push a 2.82GB packfile. We resolved it by running a soft reset (`git reset --soft HEAD~1`), unstaging the tar and binary files (`git restore --staged`), and updating `.gitignore` to prevent future tracking.
+
+#### Q2: "How do you package this custom scheduler plugin for production deployments?"
+*   **Answer:** We containerize the custom scheduler compiled binary inside a minimal Docker image (`Dockerfile.scheduler`) and run it as a secondary control-plane deployment or as a DaemonSet/Deployment in the `kube-system` namespace, specifying the custom `schedulerName: aco-sentinel-scheduler` in Pod manifests to route targeted workloads to it.
 
