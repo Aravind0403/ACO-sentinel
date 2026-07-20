@@ -54,9 +54,9 @@ graph TB
     APIServer -->|Informer Sync| KubeScheduler
     KubeScheduler -->|Delegates Lifecycle Hooks| Go_Plugin
 
-    PreScoreHook -->|gRPC: ScoreNodes| gRPCServer
-    UnreserveHook -->|gRPC: PlacementCommitted(false)| gRPCServer
-    PostBindHook -->|gRPC: PlacementCommitted(true)| gRPCServer
+    PreScoreHook -->|"gRPC: ScoreNodes"| gRPCServer
+    UnreserveHook -->|"gRPC: PlacementCommitted(Rollback)"| gRPCServer
+    PostBindHook -->|"gRPC: PlacementCommitted(Commit)"| gRPCServer
 
     PreScoreHook -->|Checks State| CircuitBreaker
     CircuitBreaker -->|Fallback if Open| ScoreHook
