@@ -10,31 +10,66 @@ The system mathematically discounts node metrics to protect the cluster against 
 
 ## System Architecture
 
-The scheduler is divided into two decoupled components to optimize performance and prevent dual-write desyncs:
+The system is decoupled into two primary runtimes to isolate high-throughput scheduling execution from data-science telemetry processing:
 
 ```mermaid
-graph TD
-    subgraph K8s Control Plane (Go)
-        K8sScheduler[kube-scheduler] -->|Scheduling Cycle| Plugin[ACOPredictiveScheduler Plugin]
-        Plugin -->|PreScore: Batch Candidates| GrpcClient[gRPC client]
-        Plugin -->|Reserve: Assumed Placement| ResMap[Reserved Placements Map]
-        Plugin -->|Unreserve / PostBind| Confirm[Commit/Rollback Callback]
+graph TB
+    subgraph K8s_CP["Kubernetes Control Plane"]
+        APIServer["K8s API Server"]
+        KubeScheduler["kube-scheduler<br/>(with ACO-Sentinel Plugin)"]
     end
 
-    subgraph Sentinel Sidecar (Python)
-        GrpcClient -->|1. ScoreNodes| GrpcServer[gRPC Server]
-        Confirm -->|2. PlacementCommitted| GrpcServer
-        GrpcServer -->|Updates Pheromones| ACOEngine[ACO Cost Engine]
-        GrpcServer -->|Computes Trust κ| Tracker[Node Confidence Tracker]
+    subgraph Worker_Nodes["Worker Nodes Cluster"]
+        SafeNode["Safe Node<br/>(κ = 1.0)"]
+        AdvNode["Adversarial Node<br/>(κ = 0.0)"]
+        FlapNode["Flapping Node<br/>(κ = 0.28)"]
+        TelemetryAgent["Telemetry Agent<br/>(Annotates K8s API)"]
     end
 
-    subgraph Node Telemetry (K8s API)
-        Agent[Telemetry Agent] -->|Annotates Node Status| K8sAPI[K8s API Server]
-        K8sAPI -->|Reads Annotations| Plugin
+    subgraph Go_Plugin["ACO-Sentinel Go Plugin"]
+        PreScoreHook["PreScore Hook<br/>(Batch Evaluation)"]
+        ScoreHook["Score Hook<br/>(Final Scoring with Trust)"]
+        ReserveHook["Reserve Hook<br/>(Pod-to-Node Mapping)"]
+        UnreserveHook["Unreserve Hook<br/>(Rollback Transaction)"]
+        PostBindHook["PostBind Hook<br/>(Commit Transaction)"]
+        CircuitBreaker["Circuit Breaker<br/>(Closed / Open / Half-Open)"]
+        LocalCache["Local Placement Cache<br/>(reservedPlacements Map)"]
+        PrometheusMetrics["Prometheus Metrics<br/>(:8082)"]
     end
+
+    subgraph Python_Sidecar["Sentinel Sidecar (Python Daemon)"]
+        gRPCServer["gRPC Server<br/>(:50051)"]
+        TrustCalc["Trust Calculator<br/>(κ_int × κ_fresh × κ_heartbeat × κ_cross)"]
+        ACOEngine["ACO Cost Engine<br/>(Pheromone Matrix)"]
+        StatePersist["State Persistence<br/>(Atomic JSON Dump)"]
+        FederationEP["Federation Endpoint<br/>(:8083 /pheromones)"]
+    end
+
+    subgraph Monitoring["Observability"]
+        Prometheus["Prometheus Server"]
+    end
+
+    %% Connections
+    Worker_Nodes -->|Status & Annotations| APIServer
+    APIServer -->|Informer Sync| KubeScheduler
+    KubeScheduler -->|Delegates Lifecycle Hooks| Go_Plugin
+
+    PreScoreHook -->|gRPC: ScoreNodes| gRPCServer
+    UnreserveHook -->|gRPC: PlacementCommitted(false)| gRPCServer
+    PostBindHook -->|gRPC: PlacementCommitted(true)| gRPCServer
+
+    PreScoreHook -->|Checks State| CircuitBreaker
+    CircuitBreaker -->|Fallback if Open| ScoreHook
+    ReserveHook -->|Stores Correlation| LocalCache
+
+    gRPCServer --> TrustCalc
+    TrustCalc --> ACOEngine
+    gRPCServer --> StatePersist
+
+    PrometheusMetrics -->|Scrape Metrics| Prometheus
 ```
 
-1. **Go Scheduler Plugin:** Implements the native K8s Scheduling Framework. It overrides `PreScore`, `Score`, `Reserve`, `Unreserve`, `PreBind`, and `PostBind` hooks. It tracks assumed placements in a thread-safe local cache, calculates cross-scheduler consistency ($\kappa_{cross}$), and coordinates decision confirmations.
+1. **Go Scheduler Plugin:** Implements the native K8s Scheduling Framework. It overrides `PreScore`, `Score`, `Reserve`, `Unreserve`, `PreBind`, and `PostBind` hooks. It tracks assumed pod-to-node placement correlations in a thread-safe local map (`reservedPlacements`), extracts native K8s scheduler cache expected allocations, and coordinates decision confirmations.
 2. **Python Telemetry Daemon:** Exposes a gRPC server for `/ScoreNodes` and `/PlacementCommitted` calls. It manages node trust tracker states, applies moving averages, and updates the ACO pheromone matrix asynchronously once placements are bound on the cluster.
 
 ---
@@ -44,6 +79,49 @@ graph TD
 Rather than hard-rejecting nodes with poor network/hardware metrics (which can bottleneck scheduling throughput), ACO-Sentinel applies a multiplicative trust discount factor $\kappa_i$ to candidate scores:
 $$\text{FinalScore}_i = \eta_i \times \kappa_i^\gamma$$
 where $\eta_i$ is the base cost-aware scoring heuristic, and $\gamma$ is the trust sensitivity exponent.
+
+### Mathematical Trust Pipeline
+
+```mermaid
+graph LR
+    subgraph Inputs["Node Telemetry Inputs"]
+        Metrics["Allocatable / Used / Free CPU"]
+        Timestamps["Heartbeat Timestamp (Δt)"]
+        Intervals["Heartbeat Intervals (CV)"]
+        Expected["Scheduler Expected Free"]
+    end
+
+    subgraph Trust_Dimensions["Trust Calculation Dimensions"]
+        K_int["Internal Consistency<br/>κ_internal = max(0, 1 - Δ / A)"]
+        K_fresh["Heartbeat Freshness<br/>κ_fresh = max(0, 1 - Δt / T_max)"]
+        K_hb["Heartbeat Jitter<br/>κ_heartbeat = max(0, 1 - CV / CV_max)"]
+        K_cross["Cross-Scheduler<br/>κ_cross = max(0, 1 - |Exp - Rep| / A)"]
+    end
+
+    subgraph Gate["Zero-Trust Multiplier Gate"]
+        Product["Multiplicative Product<br/>κ_raw = κ_int × κ_fresh × κ_hb × κ_cross"]
+        EMA["Exponential Moving Average<br/>κ_i = EMA(κ_raw, α=0.5)"]
+    end
+
+    subgraph Scoring["Final Node Score Engine"]
+        Eta["Base Cost Heuristic (η_i)<br/>(SLA / Pricing / Load)"]
+        FinalScore["Final Score<br/>Score_i = η_i × (κ_i)^γ"]
+    end
+
+    Metrics --> K_int
+    Timestamps --> K_fresh
+    Intervals --> K_hb
+    Expected --> K_cross
+
+    K_int --> Product
+    K_fresh --> Product
+    K_hb --> Product
+    K_cross --> Product
+
+    Product --> EMA
+    EMA --> FinalScore
+    Eta --> FinalScore
+```
 
 The trust factor $\kappa_i$ scales across four independent dimensions:
 
@@ -60,7 +138,7 @@ Detects node instability or network flapping. It penalizes nodes reporting with 
 $$\kappa_{\text{heartbeat}, i} = \max\left(0, 1 - \frac{\text{CV}_i}{\text{CV}_{\text{max}}}\right)$$
 
 ### 4. Cross-Scheduler Consistency ($\kappa_{\text{cross}, i}$)
-Calculated in Go by checking node-reported free resources ($F_i$) against the scheduler's internal local cache of reservations. If they diverge, the node telemetry is flagged as out-of-sync.
+Calculated by comparing node-reported free resources ($F_i$) against the expected free capacity derived from Kubernetes' native `NodeInfo` scheduler cache. If they diverge, the node telemetry is flagged as out-of-sync.
 $$\kappa_{\text{cross}, i} = \max(0, 1 - |\text{SchedulerExpectedFree}_i - F_i| / A_i)$$
 
 ---
