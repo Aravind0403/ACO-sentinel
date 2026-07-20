@@ -299,3 +299,48 @@ class NodeConfidenceTracker:
     def current_confidence(self) -> float:
         """Return the current smoothed confidence level."""
         return self.ema.value
+
+
+class AdaptiveThresholdManager:
+    """
+    Manages and adjusts cv_max and t_max dynamically based on cluster health.
+    Implements a 3-state machine with hysteresis to prevent threshold thrashing.
+    """
+
+    def __init__(self) -> None:
+        self.state = "STABLE"  # STABLE, DEGRADED, RECOVERING
+        self.stable_counter = 0
+        self.degraded_counter = 0
+
+    def evaluate_state(self, avg_cv: float) -> None:
+        # Hysteresis to prevent rapid state flipping
+        if self.state == "STABLE":
+            if avg_cv > 0.25:  # Higher threshold to enter degraded
+                self.degraded_counter += 1
+                if self.degraded_counter >= 3:  # 3 consecutive samples
+                    self.state = "DEGRADED"
+                    self.degraded_counter = 0
+            else:
+                self.degraded_counter = 0
+        elif self.state == "DEGRADED":
+            if avg_cv < 0.15:  # Lower threshold to return to stable
+                self.stable_counter += 1
+                if self.stable_counter >= 5:  # 5 consecutive samples (more conservative)
+                    self.state = "STABLE"
+                    self.stable_counter = 0
+            else:
+                self.stable_counter = 0
+        elif self.state == "RECOVERING":
+            # Intermediate state during heavy load
+            if avg_cv < 0.2:
+                self.state = "STABLE"
+            elif avg_cv > 0.35:
+                self.state = "DEGRADED"
+
+    def get_thresholds(self) -> dict:
+        if self.state == "STABLE":
+            return {"cv_max": 0.3, "t_max": 15.0}
+        elif self.state == "DEGRADED":
+            return {"cv_max": 0.8, "t_max": 60.0}
+        else:  # RECOVERING
+            return {"cv_max": 0.5, "t_max": 35.0}

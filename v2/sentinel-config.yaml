@@ -1,0 +1,22 @@
+scoring:
+  trust_exponent_gamma: 2.0
+  weight_scoring_plugin: 100
+  fallback_strategy: "resource_fit"
+
+telemetry:
+  heartbeat_timeout_seconds: 30
+  max_coefficient_variation: 0.5
+  consistency_check_window: 1000
+  anomaly_threshold_percentile: 95
+
+performance:
+  grpc_timeout_seconds: 5
+  cache_ttl_seconds: 0.2
+  max_concurrent_scoring: 100
+  batch_size: 50
+
+resilience:
+  circuit_breaker:
+    failure_threshold: 5
+    timeout_seconds: 30
+    half_open_max_attempts: 3

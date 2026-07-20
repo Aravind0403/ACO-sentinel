@@ -250,3 +250,16 @@ In Phase 7, we audit repository layout, build artifacts, and establish packaging
 #### Q2: "How do you package this custom scheduler plugin for production deployments?"
 *   **Answer:** We containerize the custom scheduler compiled binary inside a minimal Docker image (`Dockerfile.scheduler`) and run it as a secondary control-plane deployment or as a DaemonSet/Deployment in the `kube-system` namespace, specifying the custom `schedulerName: aco-sentinel-scheduler` in Pod manifests to route targeted workloads to it.
 
+#### Q3: "How does the custom scheduler implement dynamic configuration hot-reloading without restarts?"
+*   **Answer:** Both the Go scheduler plugin and the Python sidecar run concurrent background `ConfigWatcher` threads that poll the mounted configuration file (e.g. from a K8s ConfigMap volume mount) every 30 seconds. In Go, before swapping the active configuration pointer, a `Validate()` check runs to confirm parameters (like the trust exponent $\gamma$ and gRPC timeouts) lie within strict operational bounds (e.g., $\gamma \in [0.0, 5.0]$, heartbeat timeout $\ge 5s$), preventing malformed configuration from crashing the control plane.
+
+#### Q4: "How does your scheduler remain resilient if the Python telemetry sidecar crashes or becomes unreachable?"
+*   **Answer:** We implement a thread-safe `CircuitBreaker` wrapper in the Go client path. If client RPC calls return errors or timeout, the breaker increments a failure counter. Once the threshold is crossed, the breaker trips to `Open` and subsequent requests immediately bypass the sidecar, falling back to a default resource-fit score (trust factor = 1.0). The breaker attempts recovery during `HalfOpen` states using exponential retry backoff ($\text{base} \times 2^{\text{attempts}-1}$ seconds, capped at 5 minutes) to protect the daemon from restart request floods.
+
+#### Q5: "Why did you implement state hysteresis in the Python daemon's adaptive threshold manager?"
+*   **Answer:** Without hysteresis, small network latency spikes or transient heartbeat jitter would cause the scheduler to constantly thrash between `STABLE` and `DEGRADED` states. The `AdaptiveThresholdManager` uses consecutive counters to smooth transitions: entering `DEGRADED` requires 3 consecutive jittery heartbeat intervals ($CV > 0.25$), whereas recovering back to `STABLE` requires 5 consecutive stable intervals ($CV < 0.15$). This prevents scheduling score oscillation.
+
+#### Q6: "How do you perform automated sensitivity testing of the node trust scoring algorithm?"
+*   **Answer:** We created a gRPC sweep script (`test_sensitivity.py`) that uses a binary search algorithm to quickly narrow down the exact telemetry discrepancy levels at which trust decays below 0.95. To ensure we test steady-state sensitivity rather than transient step responses (since the trust EMA filter is initialized to a cold-start value of 0.7), the analyzer repeats the scoring requests 10 times in a loop during each evaluation step to allow the exponential moving average to fully settle.
+
+

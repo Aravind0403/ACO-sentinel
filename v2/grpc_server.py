@@ -12,6 +12,12 @@ from __future__ import annotations
 import os
 import sys
 import time
+import json
+import yaml
+import signal
+import threading
+import http.server
+import math
 from concurrent import futures
 from typing import Dict
 
@@ -25,6 +31,7 @@ import sentinel_pb2
 import sentinel_pb2_grpc
 from confidence import (
     NodeConfidenceTracker,
+    AdaptiveThresholdManager,
     calculate_freshness,
     calculate_heartbeat_consistency,
     calculate_internal_consistency,
@@ -40,6 +47,128 @@ from orchestrator.shared.models import (
 )
 
 
+class ConfigWatcher:
+    """
+    Background file-watcher reloading yaml configuration dynamically.
+    """
+    def __init__(self, path: str = "v2/sentinel-config.yaml") -> None:
+        self.path = path
+        # Try local path or root path
+        if not os.path.exists(self.path):
+            self.path = "sentinel-config.yaml"
+        self.config: dict = {}
+        self.load_config()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._watch_loop, daemon=True)
+        self._thread.start()
+
+    def load_config(self) -> None:
+        if os.path.exists(self.path):
+            try:
+                with open(self.path, "r") as f:
+                    self.config = yaml.safe_load(f) or {}
+                print(f"[Sentinel-ConfigWatcher] Configuration loaded from {self.path}")
+            except Exception as e:
+                print(f"[Sentinel-ConfigWatcher] Error loading config: {e}")
+
+    def _watch_loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._stop_event.wait(30)
+            self.load_config()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+
+class StatePersistence:
+    """
+    Periodically flushes and recovers committed placement state to disk atomically.
+    """
+    def __init__(self, server: ACOPredictiveSchedulerServicer, path: str = "v2/sentinel_state.json") -> None:
+        self.server = server
+        self.path = path
+        if not os.path.exists(os.path.dirname(self.path)) and os.path.dirname(self.path):
+            self.path = "sentinel_state.json"
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._save_loop, daemon=True)
+        self._thread.start()
+
+    def _save_loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._stop_event.wait(300)  # Flush every 5 minutes
+            self.save()
+
+    def save(self) -> None:
+        data = {
+            "committed_placements": self.server.committed_placements,
+            "total_deposits": self.server.total_deposits,
+            "phantom_deposits": self.server.phantom_deposits,
+            "timestamp": time.time()
+        }
+        try:
+            tmp_path = self.path + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(data, f)
+            os.rename(tmp_path, self.path)
+            print(f"[Sentinel-Persistence] State flushed atomically to {self.path}")
+        except Exception as e:
+            print(f"[Sentinel-Persistence] Error writing state: {e}")
+
+    def load(self) -> None:
+        if os.path.exists(self.path):
+            try:
+                with open(self.path, "r") as f:
+                    data = json.load(f)
+                self.server.committed_placements = data.get("committed_placements", {})
+                self.server.total_deposits = data.get("total_deposits", 0)
+                self.server.phantom_deposits = data.get("phantom_deposits", 0)
+                print(f"[Sentinel-Persistence] State loaded successfully from {self.path}")
+            except Exception as e:
+                print(f"[Sentinel-Persistence] Error loading state: {e}")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+
+class FederationHTTPServer:
+    """
+    Exposes a lightweight, read-only HTTP server for pulling cluster placements.
+    """
+    def __init__(self, server: ACOPredictiveSchedulerServicer, port: int = 8083) -> None:
+        self.server = server
+        self.port = port
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(h) -> None:
+                if h.path == "/pheromones":
+                    h.send_response(200)
+                    h.send_header("Content-Type", "application/json")
+                    h.end_headers()
+                    response = {
+                        "placements": self.server.committed_placements,
+                        "total_deposits": self.server.total_deposits,
+                        "phantom_deposits": self.server.phantom_deposits
+                    }
+                    h.wfile.write(json.dumps(response).encode())
+                else:
+                    h.send_response(404)
+                    h.end_headers()
+
+            def log_message(h, format, *args) -> None:
+                pass  # Suppress request logging to keep server console clean
+
+        try:
+            self.httpd = http.server.HTTPServer(("0.0.0.0", self.port), Handler)
+            self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+            self._thread.start()
+            print(f"[Sentinel-FederationServer] Serving metrics on port {self.port}...")
+        except Exception as e:
+            print(f"[Sentinel-FederationServer] WARNING: Failed to start HTTP server: {e}")
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+
+
 class ACOPredictiveSchedulerServicer(sentinel_pb2_grpc.ACOPredictiveSchedulerServicer):
     """
     gRPC service coordinating custom scoring and placement checks.
@@ -48,10 +177,14 @@ class ACOPredictiveSchedulerServicer(sentinel_pb2_grpc.ACOPredictiveSchedulerSer
     def __init__(self) -> None:
         self.cost_engine = CostEngine()
         self.confidence_trackers: Dict[str, NodeConfidenceTracker] = {}
-        # Keeps track of committed placements for metrics and trace reconciliation
         self.committed_placements: Dict[str, str] = {}
         self.phantom_deposits = 0
         self.total_deposits = 0
+        self.threshold_manager = AdaptiveThresholdManager()
+        self.config_watcher = ConfigWatcher()
+        self.persistence = StatePersistence(self)
+        self.persistence.load()
+        self.fed_server = FederationHTTPServer(self)
 
     def ScoreNodes(
         self,
@@ -61,12 +194,36 @@ class ACOPredictiveSchedulerServicer(sentinel_pb2_grpc.ACOPredictiveSchedulerSer
         """
         Score a list of node candidates for a given pod spec.
         """
+        if request.pod.uid == "healthz":
+            return sentinel_pb2.ScoreResponse()
         if request.pod.uid == "reset":
             self.confidence_trackers.clear()
             self.committed_placements.clear()
             self.phantom_deposits = 0
             self.total_deposits = 0
             return sentinel_pb2.ScoreResponse()
+
+        # Collect intervals and calculate CVs for active threshold management
+        cv_values = []
+        for n in request.nodes:
+            if n.recent_heartbeat_intervals:
+                intervals = list(n.recent_heartbeat_intervals)
+                if len(intervals) >= 2:
+                    mean = sum(intervals) / len(intervals)
+                    if mean > 1e-6:
+                        variance = sum((x - mean) ** 2 for x in intervals) / len(intervals)
+                        std_dev = math.sqrt(variance)
+                        cv_values.append(std_dev / mean)
+
+        if cv_values:
+            avg_cv = sum(cv_values) / len(cv_values)
+            self.threshold_manager.evaluate_state(avg_cv)
+
+        # Get dynamic thresholds
+        thresholds = self.threshold_manager.get_thresholds()
+        cv_max = thresholds["cv_max"]
+        t_max = thresholds["t_max"]
+
         # Map workload type string to enum
         workload_type_map = {
             "batch": WorkloadType.BATCH,
@@ -85,7 +242,7 @@ class ACOPredictiveSchedulerServicer(sentinel_pb2_grpc.ACOPredictiveSchedulerSer
             ),
         )
 
-        # Determine "now" - use the max last_heartbeat_timestamp from the request nodes if available (for simulation parity)
+        # Determine "now" - use the max last_heartbeat_timestamp from the request nodes if available
         heartbeats = [n.last_heartbeat_timestamp for n in request.nodes if n.last_heartbeat_timestamp > 0]
         current_time = max(heartbeats) if heartbeats else time.time()
 
@@ -99,8 +256,12 @@ class ACOPredictiveSchedulerServicer(sentinel_pb2_grpc.ACOPredictiveSchedulerSer
                     node_id=node_id,
                     alpha=0.5,
                     initial_confidence=0.7,
+                    t_max=t_max,
+                    cv_max=cv_max,
                 )
             tracker = self.confidence_trackers[node_id]
+            tracker.cv_max = cv_max
+            tracker.t_max = t_max
 
             # Record heartbeat timestamp
             if node_cand.last_heartbeat_timestamp > 0:
@@ -219,22 +380,37 @@ class ACOPredictiveSchedulerServicer(sentinel_pb2_grpc.ACOPredictiveSchedulerSer
         return sentinel_pb2.PlacementCommittedResponse(acknowledged=True)
 
 
-def serve(port: int = 50051) -> grpc.Server:
+def serve(port: int = 50051) -> tuple[grpc.Server, ACOPredictiveSchedulerServicer]:
     """Start the gRPC server."""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    servicer = ACOPredictiveSchedulerServicer()
     sentinel_pb2_grpc.add_ACOPredictiveSchedulerServicer_to_server(
-        ACOPredictiveSchedulerServicer(), server
+        servicer, server
     )
     server.add_insecure_port(f"[::]:{port}")
     server.start()
     print(f"[Sentinel-Server] Listening on port {port}...")
-    return server
+    return server, servicer
 
 
 if __name__ == "__main__":
-    server = serve()
+    server, servicer = serve()
+
+    def shutdown_handler(signum, frame) -> None:
+        print(f"[Sentinel-Server] Received signal {signum}, persisting state and shutting down...")
+        servicer.persistence.save()
+        servicer.persistence.stop()
+        servicer.config_watcher.stop()
+        servicer.fed_server.stop()
+        server.stop(0)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
     try:
         while True:
             time.sleep(86400)
-    except KeyboardInterrupt:
-        server.stop(0)
+    except SystemExit:
+        pass
+
