@@ -4,7 +4,14 @@
 
 ACO-Sentinel (Version 2) turns the stateful Ant Colony Optimization (ACO) scheduling algorithm into a native, transactionally secure Kubernetes scheduler. It implements the Kubernetes Scheduling Framework in Go, communicating over a high-performance gRPC channel with a Python sidecar telemetry consistency daemon.
 
+[![KWOK Verified](https://img.shields.io/badge/KWOK-Verified_Control_Plane-blue?style=flat-square)](#kwok-verification--empirical-benchmarks)
+[![Peak Throughput](https://img.shields.io/badge/Peak_Throughput-1%2C250_pods%2Fsec-success?style=flat-square)](#1-grpc-ipc-throughput--latency-knee-benchmark)
+[![Failover Availability](https://img.shields.io/badge/Failover-100%25_Availability_(0_Failures)-brightgreen?style=flat-square)](#2-chaos-injection--circuit-breaker-failover-benchmark)
+[![Cost Reduction](https://img.shields.io/badge/GPU_Cost_Savings-46.3%25_vs_First--Fit-orange?style=flat-square)](#3-kwok-trace-replayer-benchmark-alibaba-atc23-gpu-trace)
+
 The system mathematically discounts node metrics to protect the cluster against adversarial node telemetry, network flapping, and scheduler cache desyncs.
+
+> **Algorithm Foundation:** The core Ant Colony Optimization engine in ACO-Sentinel builds upon the research and algorithmic foundations established in [ACO_Adaptive_Compute_Orchestrator](https://github.com/Aravind0403/ACO_Adaptive_Compute_Orchestrator). Version 2 scales this core solver into a native, high-throughput Kubernetes control plane plugin with zero-trust telemetry validation.
 
 ---
 
@@ -140,6 +147,22 @@ $$\kappa_{\text{heartbeat}, i} = \max\left(0, 1 - \frac{\text{CV}_i}{\text{CV}_{
 ### 4. Cross-Scheduler Consistency ($\kappa_{\text{cross}, i}$)
 Calculated by comparing node-reported free resources ($F_i$) against the expected free capacity derived from Kubernetes' native `NodeInfo` scheduler cache. If they diverge, the node telemetry is flagged as out-of-sync.
 $$\kappa_{\text{cross}, i} = \max(0, 1 - |\text{SchedulerExpectedFree}_i - F_i| / A_i)$$
+
+---
+
+## KWOK Verification & Empirical Benchmarks
+
+Complete benchmark protocols, JSON raw log outputs, and summary tables are documented in [BENCHMARKS.md](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/BENCHMARKS.md).
+
+### Executive Summary Performance Table
+
+| Metric | Empirical Value | Infrastructure Guarantee | Verification Log |
+| :--- | :--- | :--- | :--- |
+| **Peak Throughput** | **1,250 pods/sec** | Sub-millisecond P99 IPC latency under burst load | [docs/kwok-grpc-knee-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-grpc-knee-results.json) |
+| **Failover Availability** | **100% (0 failed bindings)** | Uninterrupted pod scheduling during sidecar SIGKILL crashes | [docs/kwok-chaos-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-chaos-results.json) |
+| **GPU Cost Savings** | **46.3% – 50.0%** | Cost savings over First-Fit on Alibaba ATC'23 GPU cluster trace | [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json) |
+| **QoS Compliance** | **100.0% LS $\to$ ON_DEMAND** | Guaranteed non-preemptible routing for Latency-Sensitive jobs | [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json) |
+| **Zero-Trust Filtering** | **100% isolation ($\kappa \to 0.0$)** | Dynamic isolation against metrics jitter and telemetry corruption | [docs/kwok-jitter-benchmark.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-jitter-benchmark.json) |
 
 ---
 

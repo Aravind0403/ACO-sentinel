@@ -1,0 +1,8 @@
+{
+  "total_pods": 500,
+  "failed_bindings": 0,
+  "availability_pct": 100.0,
+  "circuit_breaker_transitions": ["CLOSED", "OPEN", "HALF-OPEN", "CLOSED"],
+  "max_latency_ms": 50.15,
+  "status": "PASSED"
+}
