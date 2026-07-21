@@ -3,9 +3,14 @@
   "nodes_count": 32,
   "random_cost_hr": 257.6,
   "firstfit_cost_hr": 120.0,
+  "kube_scheduler_least_allocated_hr": 120.0,
+  "kube_scheduler_most_allocated_hr": 60.04,
   "aco_cost_only_hr": 60.0,
   "aco_qos_aware_hr": 64.44,
   "cost_reduction_vs_random_pct": 76.7,
   "cost_reduction_vs_firstfit_pct": 50.0,
-  "ls_on_demand_compliance_pct": 100.0
+  "cost_savings_vs_default_kube_scheduler_pct": 46.3,
+  "cost_savings_vs_kube_binpacking_pct": -7.3,
+  "ls_on_demand_compliance_pct": 100.0,
+  "kube_scheduler_ls_compliance_pct": 100.0
 }

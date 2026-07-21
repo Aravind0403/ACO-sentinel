@@ -160,7 +160,7 @@ Complete benchmark protocols, JSON raw log outputs, and summary tables are docum
 | :--- | :--- | :--- | :--- |
 | **Peak Throughput** | **1,250 pods/sec** | Sub-millisecond P99 IPC latency under burst load | [docs/kwok-grpc-knee-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-grpc-knee-results.json) |
 | **Failover Availability** | **100% (0 failed bindings)** | Uninterrupted pod scheduling during sidecar SIGKILL crashes | [docs/kwok-chaos-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-chaos-results.json) |
-| **GPU Cost Savings** | **46.3% – 50.0%** | Cost savings over First-Fit on Alibaba ATC'23 GPU cluster trace | [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json) |
+| **GPU Cost Savings** | **46.3% Cost Reduction** | Cost savings over default `kube-scheduler` (`NodeResourcesFit`) | [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json) |
 | **QoS Compliance** | **100.0% LS $\to$ ON_DEMAND** | Guaranteed non-preemptible routing for Latency-Sensitive jobs | [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json) |
 | **Zero-Trust Filtering** | **100% isolation ($\kappa \to 0.0$)** | Dynamic isolation against metrics jitter and telemetry corruption | [docs/kwok-jitter-benchmark.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-jitter-benchmark.json) |
 

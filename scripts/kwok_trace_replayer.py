@@ -5,7 +5,13 @@ ACO-Sentinel (Version 2) - KWOK Trace Replayer & Cost Efficiency Benchmark
 
 Replays production cluster traces (Alibaba ATC'23 GPU cluster dataset)
 into synthetic KWOK Pod and Node manifests, benchmarking placement cost reduction
-and ON_DEMAND QoS compliance.
+and ON_DEMAND QoS compliance against:
+1. Random Baseline
+2. First-Fit Baseline
+3. Default Kube-Scheduler (NodeResourcesFit - LeastAllocated) [Official Default K8s Plugin]
+4. Default Kube-Scheduler (NodeResourcesFit - MostAllocated)  [Official Bin-Packing Plugin]
+5. ACO Cost-Only (Ours)
+6. ACO + QoS Aware (Ours)
 """
 
 import sys
@@ -18,13 +24,13 @@ import numpy as np
 
 # 32 Nodes spanning 7 GPU Types (Alibaba ATC'23 Hardware Distribution)
 GPU_NODES = [
-    {"type": "A10", "cost": 1.20, "count": 6, "instance": "on_demand"},
-    {"type": "T4", "cost": 0.60, "count": 8, "instance": "on_demand"},
-    {"type": "P100", "cost": 1.60, "count": 4, "instance": "on_demand"},
-    {"type": "V100M16", "cost": 3.06, "count": 4, "instance": "on_demand"},
-    {"type": "V100M32", "cost": 25.60, "count": 2, "instance": "on_demand"},
-    {"type": "G2", "cost": 0.80, "count": 4, "instance": "spot"},
-    {"type": "G3", "cost": 0.90, "count": 4, "instance": "spot"},
+    {"type": "A10", "cost": 1.20, "count": 6, "instance": "on_demand", "total_cpu": 64, "total_mem": 256},
+    {"type": "T4", "cost": 0.60, "count": 8, "instance": "on_demand", "total_cpu": 32, "total_mem": 128},
+    {"type": "P100", "cost": 1.60, "count": 4, "instance": "on_demand", "total_cpu": 48, "total_mem": 192},
+    {"type": "V100M16", "cost": 3.06, "count": 4, "instance": "on_demand", "total_cpu": 64, "total_mem": 256},
+    {"type": "V100M32", "cost": 25.60, "count": 2, "instance": "on_demand", "total_cpu": 128, "total_mem": 512},
+    {"type": "G2", "cost": 0.80, "count": 4, "instance": "spot", "total_cpu": 32, "total_mem": 128},
+    {"type": "G3", "cost": 0.90, "count": 4, "instance": "spot", "total_cpu": 32, "total_mem": 128},
 ]
 
 def generate_kwok_nodes():
@@ -39,6 +45,10 @@ def generate_kwok_nodes():
                 "gpu_type": group["type"],
                 "cost_per_hr": group["cost"],
                 "instance_type": group["instance"],
+                "total_cpu": group["total_cpu"],
+                "total_mem": group["total_mem"],
+                "used_cpu": 0,
+                "used_mem": 0,
                 "allocated_pods": 0
             })
     return nodes
@@ -49,17 +59,27 @@ def simulate_trace_replay(nodes, num_jobs=100, seeds=5):
     # Baselines
     random_costs = []
     firstfit_costs = []
+    kube_least_costs = []
+    kube_most_costs = []
     aco_cost_only = []
     aco_qos_aware = []
     
     ls_on_demand_compliance_aco_qos = 0
+    ls_on_demand_compliance_kube_least = 0
+    ls_on_demand_compliance_kube_most = 0
     total_ls_jobs = 0
 
     for seed in range(seeds):
         random.seed(42 + seed)
         np.random.seed(42 + seed)
         
-        c_random, c_firstfit, c_acocost, c_acoqos = 0.0, 0.0, 0.0, 0.0
+        # Reset node states for clean seed run
+        active_nodes = [dict(n) for n in nodes]
+        for n in active_nodes:
+            n["used_cpu"] = 0
+            n["used_mem"] = 0
+
+        c_random, c_firstfit, c_kube_least, c_kube_most, c_acocost, c_acoqos = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         
         for job_id in range(num_jobs):
             # 78% Latency Sensitive (LS), 22% Best Effort (BE)
@@ -67,22 +87,46 @@ def simulate_trace_replay(nodes, num_jobs=100, seeds=5):
             if seed == 0 and is_ls:
                 total_ls_jobs += 1
 
-            # Feasible nodes (assume all healthy)
-            feasible = nodes.copy()
+            job_cpu = 4
+            job_mem = 16
 
-            # Random Baseline
+            feasible = active_nodes.copy()
+
+            # 1. Random Baseline
             rand_node = random.choice(feasible)
             c_random += rand_node["cost_per_hr"]
 
-            # First-Fit Baseline (Iterates in node definition order)
+            # 2. First-Fit Baseline
             firstfit_node = feasible[0]
             c_firstfit += firstfit_node["cost_per_hr"]
 
-            # ACO Cost-Only (Routes to cheapest feasible node regardless of QoS)
+            # 3. Default Kube-Scheduler: NodeResourcesFit (LeastAllocated)
+            # Score = (Allocatable - Used - Requested) / Allocatable -> Favors nodes with most free headroom
+            def least_allocated_score(n):
+                free_cpu = n["total_cpu"] - n["used_cpu"]
+                return free_cpu / max(1.0, float(n["total_cpu"]))
+            
+            kube_least_node = max(feasible, key=least_allocated_score)
+            c_kube_least += kube_least_node["cost_per_hr"]
+            if seed == 0 and is_ls and kube_least_node["instance_type"] == "on_demand":
+                ls_on_demand_compliance_kube_least += 1
+
+            # 4. Default Kube-Scheduler: NodeResourcesFit (MostAllocated)
+            # Score = (Used + Requested) / Allocatable -> Favors tightly packed nodes
+            def most_allocated_score(n):
+                used_cpu = n["used_cpu"] + job_cpu
+                return used_cpu / max(1.0, float(n["total_cpu"]))
+            
+            kube_most_node = max(feasible, key=most_allocated_score)
+            c_kube_most += kube_most_node["cost_per_hr"]
+            if seed == 0 and is_ls and kube_most_node["instance_type"] == "on_demand":
+                ls_on_demand_compliance_kube_most += 1
+
+            # 5. ACO Cost-Only (Routes to cheapest node regardless of QoS)
             cheapest_node = sorted(feasible, key=lambda x: x["cost_per_hr"])[0]
             c_acocost += cheapest_node["cost_per_hr"]
 
-            # ACO + QoS (Prefers ON_DEMAND for LS, SPOT for BE)
+            # 6. ACO + QoS Aware (Prefers ON_DEMAND for LS, SPOT for BE)
             if is_ls:
                 od_nodes = [n for n in feasible if n["instance_type"] == "on_demand"]
                 chosen_aco = sorted(od_nodes, key=lambda x: x["cost_per_hr"])[0] if od_nodes else cheapest_node
@@ -94,30 +138,47 @@ def simulate_trace_replay(nodes, num_jobs=100, seeds=5):
 
             c_acoqos += chosen_aco["cost_per_hr"]
 
+            # Update state for packing
+            chosen_aco["used_cpu"] += job_cpu
+            chosen_aco["used_mem"] += job_mem
+
         random_costs.append(c_random)
         firstfit_costs.append(c_firstfit)
+        kube_least_costs.append(c_kube_least)
+        kube_most_costs.append(c_kube_most)
         aco_cost_only.append(c_acocost)
         aco_qos_aware.append(c_acoqos)
 
     avg_random = np.mean(random_costs)
     avg_firstfit = np.mean(firstfit_costs)
+    avg_kube_least = np.mean(kube_least_costs)
+    avg_kube_most = np.mean(kube_most_costs)
     avg_acocost = np.mean(aco_cost_only)
     avg_acoqos = np.mean(aco_qos_aware)
 
     cost_reduction_vs_random = ((avg_random - avg_acocost) / avg_random) * 100.0
     cost_reduction_vs_firstfit = ((avg_firstfit - avg_acocost) / avg_firstfit) * 100.0
+    cost_reduction_vs_kube_least = ((avg_kube_least - avg_acoqos) / avg_kube_least) * 100.0
+    cost_reduction_vs_kube_most = ((avg_kube_most - avg_acoqos) / avg_kube_most) * 100.0
+
     qos_compliance_pct = (ls_on_demand_compliance_aco_qos / max(1, total_ls_jobs)) * 100.0
+    kube_least_qos_pct = (ls_on_demand_compliance_kube_least / max(1, total_ls_jobs)) * 100.0
 
     return {
         "num_jobs": num_jobs,
         "nodes_count": len(nodes),
         "random_cost_hr": round(float(avg_random), 2),
         "firstfit_cost_hr": round(float(avg_firstfit), 2),
+        "kube_scheduler_least_allocated_hr": round(float(avg_kube_least), 2),
+        "kube_scheduler_most_allocated_hr": round(float(avg_kube_most), 2),
         "aco_cost_only_hr": round(float(avg_acocost), 2),
         "aco_qos_aware_hr": round(float(avg_acoqos), 2),
         "cost_reduction_vs_random_pct": round(float(cost_reduction_vs_random), 1),
         "cost_reduction_vs_firstfit_pct": round(float(cost_reduction_vs_firstfit), 1),
-        "ls_on_demand_compliance_pct": round(float(qos_compliance_pct), 1)
+        "cost_savings_vs_default_kube_scheduler_pct": round(float(cost_reduction_vs_kube_least), 1),
+        "cost_savings_vs_kube_binpacking_pct": round(float(cost_reduction_vs_kube_most), 1),
+        "ls_on_demand_compliance_pct": round(float(qos_compliance_pct), 1),
+        "kube_scheduler_ls_compliance_pct": round(float(kube_least_qos_pct), 1)
     }
 
 def main():
@@ -132,13 +193,16 @@ def main():
     results = simulate_trace_replay(nodes, num_jobs=args.jobs)
 
     print("\n=== KWOK Trace Replayer Benchmark Results ===")
-    print(f"Total GPU Placement Cost (Random Baseline) : ${results['random_cost_hr']:.2f}/hr")
-    print(f"Total GPU Placement Cost (First-Fit)       : ${results['firstfit_cost_hr']:.2f}/hr")
-    print(f"Total GPU Placement Cost (ACO Cost-Only)   : ${results['aco_cost_only_hr']:.2f}/hr")
-    print(f"Total GPU Placement Cost (ACO + QoS Aware)  : ${results['aco_qos_aware_hr']:.2f}/hr")
-    print(f"Cost Reduction vs Random Baseline          : {results['cost_reduction_vs_random_pct']}%")
-    print(f"Cost Reduction vs First-Fit Baseline       : {results['cost_reduction_vs_firstfit_pct']}%")
-    print(f"LS -> ON_DEMAND QoS Compliance              : {results['ls_on_demand_compliance_pct']}%")
+    print(f"1. Random Baseline                            : ${results['random_cost_hr']:.2f}/hr")
+    print(f"2. First-Fit Baseline                         : ${results['firstfit_cost_hr']:.2f}/hr")
+    print(f"3. Default kube-scheduler (NodeResourcesFit) : ${results['kube_scheduler_least_allocated_hr']:.2f}/hr (LS Compliance: {results['kube_scheduler_ls_compliance_pct']}%)")
+    print(f"4. Bin-Packing kube-scheduler (MostAllocated) : ${results['kube_scheduler_most_allocated_hr']:.2f}/hr")
+    print(f"5. ACO-Sentinel Cost-Only                     : ${results['aco_cost_only_hr']:.2f}/hr")
+    print(f"6. ACO-Sentinel + QoS Aware (Ours)            : ${results['aco_qos_aware_hr']:.2f}/hr (LS Compliance: {results['ls_on_demand_compliance_pct']}%)")
+    print("-" * 75)
+    print(f"Cost Savings vs Default kube-scheduler        : {results['cost_savings_vs_default_kube_scheduler_pct']}% Savings")
+    print(f"Cost Savings vs kube Bin-Packing              : {results['cost_savings_vs_kube_binpacking_pct']}% Savings")
+    print(f"LS -> ON_DEMAND QoS Compliance                 : {results['ls_on_demand_compliance_pct']}%")
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/kwok-trace-replay-results.json", "w") as f:
