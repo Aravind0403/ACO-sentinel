@@ -4,6 +4,12 @@ This document provides a comprehensive report of all empirical control-plane ben
 
 ---
 
+## The Core Finding: Accidental vs. Intentional QoS Compliance
+
+> *"Default Kubernetes scheduling achieves 100% latency-sensitive QoS compliance—by accident. It spreads workloads to the largest nodes, which happen to be On-Demand, while wasting $25/hr GPU nodes on 2-core batch pods. ACO-Sentinel achieves the same compliance intentionally, at 46% lower cost, by making price and reliability first-class scheduling signals."*
+
+---
+
 ## Executive Summary Metrics
 
 | Benchmark Metric | Empirical Value | Infrastructure Guarantee | Verification Source |
@@ -16,7 +22,27 @@ This document provides a comprehensive report of all empirical control-plane ben
 
 ---
 
-## 1. gRPC IPC Throughput & Latency Knee Benchmark
+## 1. KWOK Trace Replayer Benchmark (Alibaba ATC'23 GPU Trace)
+
+Replays 100 GPU tasks across 32 virtual KWOK nodes spanning 7 GPU types (A10, T4, P100, V100M16, V100M32, G2, G3). Compares ACO-Sentinel against official Kubernetes `kube-scheduler` plugins (`NodeResourcesFit - LeastAllocated` and `NodeResourcesFit - MostAllocated`).
+
+*Script:* [scripts/kwok_trace_replayer.py](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/scripts/kwok_trace_replayer.py)  
+*Data:* [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json)
+
+### Main Comparison Table
+
+| Strategy | Total Hourly Placement Cost ($/hr) | LS $\to$ ON_DEMAND Compliance | Underlying Mechanism / Why |
+| :--- | :--- | :--- | :--- |
+| **Default `kube-scheduler` (`LeastAllocated`)** | **$120.00/hr** | **100.0%** | **Accidental compliance:** Spreads to largest nodes (V100M32/A10) first, which happen to be On-Demand. Wastes $25/hr nodes on small 2-core pods. |
+| **Bin-Packing `kube-scheduler` (`MostAllocated`)** | $60.04/hr | 52.1% | **QoS-Blind:** Packs pods indiscriminately onto partially-filled nodes, exposing 47.9% of Latency-Sensitive pods to SPOT preemption cascades. |
+| **ACO-Sentinel Cost-Only (Ablation)** | $60.00/hr | 74.4% | **Structural alignment:** Price heuristic ($c_i$) steers to cheapest node ($0.60/hr T4), which structurally aligns with On-Demand. |
+| **ACO-Sentinel + QoS (Ours)** | **$64.44/hr** | **100.0%** | **Intentional compliance:** Explicit $r_i$ penalty on SPOT nodes guarantees non-preemptible routing at 46.3% lower cost than Default K8s. |
+
+> *Footnote:* Uniform Random placement over feasible nodes averages $257.60/hr (Sanity Check Baseline). It demonstrates extreme price skew sensitivity in heterogeneous clusters where V100M32 nodes ($25.60/hr) are 42.6× more expensive than T4 nodes ($0.60/hr).
+
+---
+
+## 2. gRPC IPC Throughput & Latency Knee Benchmark
 
 Evaluates loopback gRPC serialization and vector scoring latency over socket `:50051` across increasing pod creation burst sizes.
 
@@ -36,7 +62,7 @@ Evaluates loopback gRPC serialization and vector scoring latency over socket `:5
 
 ---
 
-## 2. Chaos Injection & Circuit Breaker Failover Benchmark
+## 3. Chaos Injection & Circuit Breaker Failover Benchmark
 
 Injects a sudden `SIGKILL` process crash into the Python Sentinel sidecar daemon while a continuous stream of pods is being scheduled.
 
@@ -60,28 +86,6 @@ Timeline Execution Log:
 ```
 
 *Key Finding:* **0 failed pod bindings (100.0% scheduling availability)**. The circuit breaker cleanly transitions `CLOSED` $\to$ `OPEN` $\to$ `HALF-OPEN` $\to$ `CLOSED`, capping maximum latency at 50.15 ms during the failure timeout window.
-
----
-
-## 3. KWOK Trace Replayer Benchmark (Alibaba ATC'23 GPU Trace)
-
-Replays 100 GPU tasks across 32 virtual KWOK nodes spanning 7 GPU types (A10, T4, P100, V100M16, V100M32, G2, G3). Compares ACO-Sentinel against official Kubernetes `kube-scheduler` plugins (`NodeResourcesFit - LeastAllocated` and `NodeResourcesFit - MostAllocated`).
-
-*Script:* [scripts/kwok_trace_replayer.py](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/scripts/kwok_trace_replayer.py)  
-*Data:* [docs/kwok-trace-replay-results.json](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/docs/kwok-trace-replay-results.json)
-
-| Scheduling Strategy | Total Hourly Placement Cost ($/hr) | Mean Cost per GPU Job ($/hr) | LS $\to$ ON_DEMAND Compliance | Cost Savings vs. Default K8s |
-| :--- | :--- | :--- | :--- | :--- |
-| **Random Baseline** | $257.60/hr | $2.58/hr | 51.3% | — |
-| **First-Fit Baseline** | $120.00/hr | $1.20/hr | 92.3% | — |
-| **Default `kube-scheduler` (`LeastAllocated`)** | **$120.00/hr** | **$1.20/hr** | **100.0%** | **Baseline (0.0%)** |
-| **Bin-Packing `kube-scheduler` (`MostAllocated`)** | $60.04/hr | $0.60/hr | 52.1% (Exposes LS to SPOT) | +49.9% (Unsafe) |
-| **ACO-Sentinel Cost-Only (Ours)** | $60.00/hr | $0.60/hr | 74.4% | **50.0% reduction** |
-| **ACO-Sentinel + QoS Aware (Ours)**| **$64.44/hr** | **$0.64/hr** | **100.0%** | **46.3% reduction** |
-
-*Key Takeaways:*
-1. **46.3% Cost Reduction over Default `kube-scheduler` (`LeastAllocated`):** Default `kube-scheduler` is price-blind; it spreads workloads evenly, placing small batch jobs onto expensive $25.60/hr V100M32 nodes. ACO-Sentinel steers small workloads away from expensive nodes, saving 46.3% in hourly placement costs.
-2. **QoS Protection vs Raw Bin-Packing (`MostAllocated`):** While raw `MostAllocated` bin-packing achieves $60.04/hr, it is price-blind and QoS-blind, placing Latency-Sensitive (LS) inference pods onto interruptible SPOT nodes ($0.80/hr G2 / $0.90/hr G3). ACO-Sentinel (`ACO + QoS`) delivers **100% LS $\to$ ON_DEMAND compliance** at $64.44/hr, shielding AI serving jobs from SPOT preemption cascades.
 
 ---
 
