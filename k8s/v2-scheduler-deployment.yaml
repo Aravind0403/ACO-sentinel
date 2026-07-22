@@ -79,10 +79,17 @@ spec:
         app: aco-sentinel-scheduler
     spec:
       serviceAccountName: aco-scheduler-sa
+      nodeSelector:
+        cloud.google.com/gke-nodepool: gpu-pool
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Equal"
+          value: "present"
+          effect: "NoSchedule"
       containers:
         - name: scheduler
           image: us-central1-docker.pkg.dev/starry-trilogy-503219-s4/aco-sentinel/scheduler:v2.0
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           command:
             - /bin/kube-scheduler
             - --config=/etc/kubernetes/scheduler/scheduler-config.yaml
@@ -92,7 +99,7 @@ spec:
               mountPath: /etc/kubernetes/scheduler
         - name: sidecar
           image: us-central1-docker.pkg.dev/starry-trilogy-503219-s4/aco-sentinel/sidecar:v2.0
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 50051
           env:

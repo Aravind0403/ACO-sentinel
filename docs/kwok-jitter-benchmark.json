@@ -1,8 +1,8 @@
 {
   "nodes": 100,
   "jitter_pct": 20.0,
-  "duration_sec": 10.013346195220947,
-  "ticks": 5,
-  "degraded_nodes_isolated": 100,
+  "duration_sec": 30.05138087272644,
+  "ticks": 15,
+  "degraded_nodes_isolated": 300,
   "routing_protection_pct": 100.0
 }
