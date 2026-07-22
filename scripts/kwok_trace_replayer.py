@@ -37,7 +37,7 @@ def generate_kwok_nodes():
     nodes = []
     idx = 0
     for group in GPU_NODES:
-        for _ in range(group["count"]):
+        for _ in range(int(group["count"])):
             idx += 1
             node_name = f"kwok-gpu-node-{idx:02d}"
             nodes.append({

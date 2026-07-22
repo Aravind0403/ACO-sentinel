@@ -81,8 +81,8 @@ spec:
       serviceAccountName: aco-scheduler-sa
       containers:
         - name: scheduler
-          image: localhost/aco-sentinel-scheduler:latest
-          imagePullPolicy: Never
+          image: us-central1-docker.pkg.dev/starry-trilogy-503219-s4/aco-sentinel/scheduler:v2.0
+          imagePullPolicy: IfNotPresent
           command:
             - /bin/kube-scheduler
             - --config=/etc/kubernetes/scheduler/scheduler-config.yaml
@@ -91,8 +91,8 @@ spec:
             - name: config-volume
               mountPath: /etc/kubernetes/scheduler
         - name: sidecar
-          image: localhost/aco-sentinel-sidecar:latest
-          imagePullPolicy: Never
+          image: us-central1-docker.pkg.dev/starry-trilogy-503219-s4/aco-sentinel/sidecar:v2.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 50051
           env:
