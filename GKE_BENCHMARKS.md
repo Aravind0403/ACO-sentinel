@@ -35,20 +35,21 @@ The custom scheduler has been successfully rescheduled and is running on the GKE
 
 The following metrics were executed and recorded on the active host environment.
 
-### A. gRPC IPC Throughput & Latency (Knee Test)
-Measures the loopback gRPC serialization, socket transit, and NumPy vector cost matrix scoring latency under concurrent pod queue bursts.
+### A. gRPC IPC Throughput & Latency (CPU Node Run)
+Measures the loopback gRPC serialization, socket transit, and NumPy vector cost matrix scoring latency under concurrent pod queue bursts when hosted on the CPU node pool (`cpu-pool` on `e2-medium`).
 
 | Burst Size (Pods) | P50 Latency (ms) | P95 Latency (ms) | P99 Latency (ms) | Throughput (Pods/sec) |
 | :--- | :--- | :--- | :--- | :--- |
-| **100** | 0.784 ms | 0.875 ms | **0.963 ms** | 1,256.1 pods/s |
-| **500** | 0.786 ms | 0.906 ms | **0.973 ms** | 1,245.6 pods/s |
-| **1,000** | 0.781 ms | 0.890 ms | **0.986 ms** | **1,254.7 pods/s (Knee Peak)** |
-| **2,500** | 0.973 ms | 1.087 ms | **1.164 ms** | 1,011.7 pods/s |
-| **5,000** | 1.910 ms | 2.025 ms | **2.113 ms** | 519.4 pods/s |
-| **7,500** | 2.847 ms | 2.960 ms | **3.038 ms** | 349.4 pods/s |
-| **10,000** | 3.785 ms | 3.898 ms | **3.983 ms** | 263.2 pods/s |
+| **100** | 0.783 ms | 0.917 ms | **0.958 ms** | 1,241.6 pods/s |
+| **500** | 0.787 ms | 0.895 ms | **0.961 ms** | 1,249.5 pods/s |
+| **1,000** | 0.785 ms | 0.892 ms | **0.981 ms** | **1,252.6 pods/s (Knee Peak)** |
+| **2,500** | 0.972 ms | 1.085 ms | **1.168 ms** | 1,013.0 pods/s |
+| **5,000** | 1.909 ms | 2.026 ms | **2.102 ms** | 519.5 pods/s |
+| **7,500** | 2.847 ms | 2.964 ms | **3.045 ms** | 349.4 pods/s |
+| **10,000** | 3.785 ms | 3.899 ms | **3.978 ms** | 263.2 pods/s |
 
-* **Knee Capacity:** The control plane achieves peak throughput at **1,250 pods/sec** with sub-millisecond P99 latency. Under extreme queue pressure (10,000 pods), latency scales linearly, capping at **3.98 ms** (well below the Kubernetes 10 ms SLA limit).
+* **Knee Capacity:** The control plane achieves peak throughput at **1,252.6 pods/sec** with sub-millisecond P99 latency. Under extreme queue pressure (10,000 pods), latency scales linearly, capping at **3.98 ms** (well below the Kubernetes 10 ms SLA limit).
+* *Dataset Note:* This CPU node baseline corresponds to the initial benchmark dataset (`docs/kwok-grpc-knee-results.json` at git commit `aac6071` / `BENCHMARKS.md`). When the scheduler deployment was moved to the GPU node pool (`gpu-pool`), a second run was executed and outputted to `docs/kwok-grpc-knee-results.json` (documented below in Section 3).
 
 ---
 
