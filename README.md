@@ -163,14 +163,14 @@ ACO-Sentinel (Version 2) has been fully containerized and deployed to a live **G
 
 | Metric Category | Target / Baseline | ACO-Sentinel Result | Engineering Significance |
 | :--- | :--- | :--- | :--- |
-| **1. Peak gRPC Throughput** | 1,000 pods/sec SLA | **1,254.7 pods/sec** | Peak knee throughput achieved at 1,000 pod burst with **0.986 ms P99 latency**. |
+| **1. Peak gRPC Throughput** | 1,000 pods/sec SLA | **1,252.6 pods/sec (CPU) / 1,245.6 pods/sec (GPU)** | Peak knee throughput achieved at 1,000 pod burst with sub-millisecond P99 latency (**0.981 ms CPU / 0.971 ms GPU**). |
 | **2. Heavy Queue Latency Cap** | < 10.0 ms K8s SLA | **3.98 ms P99** | Scaled linearly under 10,000 pod queue bursts, capping at 3.98 ms. |
 | **3. GPU Cost Reduction** | Default K8s ($120.00/hr) | **$64.44/hr (46.3% Savings)** | Alibaba GPU trace replay across 32 nodes; packs efficiently without SLA degradation. |
 | **4. QoS SLA Compliance** | Bin-packing K8s (52.1%) | **100.0% LS $\to$ ON_DEMAND** | Intentional preemption penalties steer Latency-Sensitive pods off Spot instances. |
 | **5. Chaos Failover Availability**| 0% packet loss target | **100.0% (0 failed bindings)** | Circuit breaker (`CLOSED` $\to$ `OPEN` $\to$ `HALF-OPEN` $\to$ `CLOSED`) handles daemon `SIGKILL`. |
 | **6. Zero-Trust Isolation** | 100% isolation target | **300 / 300 Degraded Ticks (100%)** | Multiplicative Trust engine ($\kappa \to 0.0$) bypasses lying and flapping nodes. |
 
-> **Hardware Invariance:** Hosting the 2-container custom scheduler pod on the NVIDIA L4 GPU instance (`g2-standard-4`) produced an identical latency profile (P99 **0.971 ms**) compared to the CPU instance (P99 **0.986 ms**), confirming that node hosting environment resource types do not degrade sub-millisecond gRPC IPC loopback performance.
+> **Hardware Invariance:** Hosting the 2-container custom scheduler pod on the NVIDIA L4 GPU instance (`g2-standard-4`) vs. the CPU instance (`e2-medium`) produced virtually identical sub-millisecond latency profiles (P99 **0.971 ms** on GPU vs. **0.981 ms** on CPU), confirming that node hosting environment resource types do not degrade gRPC IPC loopback performance.
 
 ---
 
