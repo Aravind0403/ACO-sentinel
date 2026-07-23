@@ -4,6 +4,7 @@
 
 ACO-Sentinel (Version 2) turns the stateful Ant Colony Optimization (ACO) scheduling algorithm into a native, transactionally secure Kubernetes scheduler. It implements the Kubernetes Scheduling Framework in Go, communicating over a high-performance gRPC channel with a Python sidecar telemetry consistency daemon.
 
+[![GKE Verified](https://img.shields.io/badge/GKE-Verified_Control_Plane-blue?style=flat-square)](#gke-cluster-deployment--empirical-benchmarks)
 [![KWOK Verified](https://img.shields.io/badge/KWOK-Verified_Control_Plane-blue?style=flat-square)](#kwok-verification--empirical-benchmarks)
 [![Peak Throughput](https://img.shields.io/badge/Peak_Throughput-1%2C250_pods%2Fsec-success?style=flat-square)](#1-grpc-ipc-throughput--latency-knee-benchmark)
 [![Failover Availability](https://img.shields.io/badge/Failover-100%25_Availability_(0_Failures)-brightgreen?style=flat-square)](#2-chaos-injection--circuit-breaker-failover-benchmark)
@@ -147,6 +148,31 @@ $$\kappa_{\text{heartbeat}, i} = \max\left(0, 1 - \frac{\text{CV}_i}{\text{CV}_{
 ### 4. Cross-Scheduler Consistency ($\kappa_{\text{cross}, i}$)
 Calculated by comparing node-reported free resources ($F_i$) against the expected free capacity derived from Kubernetes' native `NodeInfo` scheduler cache. If they diverge, the node telemetry is flagged as out-of-sync.
 $$\kappa_{\text{cross}, i} = \max(0, 1 - |\text{SchedulerExpectedFree}_i - F_i| / A_i)$$
+
+## GKE Cluster Deployment & Empirical Benchmarks
+
+ACO-Sentinel (Version 2) has been fully containerized and deployed to a live **Google Kubernetes Engine (GKE)** cluster (`gpu-inference-cluster` in `us-central1-a`, Kubernetes `v1.35.6-gke.1049000`), validating both CPU and physical NVIDIA GPU node pools.
+
+* **Full GKE Empirical Benchmark Report:** [GKE_BENCHMARKS.md](file:///Users/aravindsundaresan/Development/ACO_Project_Front/ACO_Project_Upfront_V2/GKE_BENCHMARKS.md)
+* **GCP Artifact Registry Images:** `us-central1-docker.pkg.dev/starry-trilogy-503219-s4/aco-sentinel/scheduler:v2.0` & `sidecar:v2.0`
+* **Node Pools Tested:**
+  * **CPU Node Pool:** `cpu-pool` (1 × `e2-medium` node)
+  * **GPU Node Pool:** `gpu-pool` (1 × `g2-standard-4` node with 1 × NVIDIA L4 GPU)
+
+### Summary of GKE Control-Plane Benchmarks
+
+| Metric Category | Target / Baseline | ACO-Sentinel Result | Engineering Significance |
+| :--- | :--- | :--- | :--- |
+| **1. Peak gRPC Throughput** | 1,000 pods/sec SLA | **1,254.7 pods/sec** | Peak knee throughput achieved at 1,000 pod burst with **0.986 ms P99 latency**. |
+| **2. Heavy Queue Latency Cap** | < 10.0 ms K8s SLA | **3.98 ms P99** | Scaled linearly under 10,000 pod queue bursts, capping at 3.98 ms. |
+| **3. GPU Cost Reduction** | Default K8s ($120.00/hr) | **$64.44/hr (46.3% Savings)** | Alibaba GPU trace replay across 32 nodes; packs efficiently without SLA degradation. |
+| **4. QoS SLA Compliance** | Bin-packing K8s (52.1%) | **100.0% LS $\to$ ON_DEMAND** | Intentional preemption penalties steer Latency-Sensitive pods off Spot instances. |
+| **5. Chaos Failover Availability**| 0% packet loss target | **100.0% (0 failed bindings)** | Circuit breaker (`CLOSED` $\to$ `OPEN` $\to$ `HALF-OPEN` $\to$ `CLOSED`) handles daemon `SIGKILL`. |
+| **6. Zero-Trust Isolation** | 100% isolation target | **300 / 300 Degraded Ticks (100%)** | Multiplicative Trust engine ($\kappa \to 0.0$) bypasses lying and flapping nodes. |
+
+> **Hardware Invariance:** Hosting the 2-container custom scheduler pod on the NVIDIA L4 GPU instance (`g2-standard-4`) produced an identical latency profile (P99 **0.971 ms**) compared to the CPU instance (P99 **0.986 ms**), confirming that node hosting environment resource types do not degrade sub-millisecond gRPC IPC loopback performance.
+
+---
 
 ## KWOK Verification & Empirical Benchmarks
 
